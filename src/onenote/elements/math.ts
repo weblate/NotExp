@@ -1,117 +1,120 @@
-import {browserAdaptor} from "@mathjax/src/js/adaptors/browserAdaptor.js";
-import {RegisterHTMLHandler} from "@mathjax/src/js/handlers/html.js";
-import {mathjax} from '@mathjax/src/js/mathjax.js';
-import {MathML} from "@mathjax/src/js/input/mathml.js";
-import {SVG} from "@mathjax/src/js/output/svg.js";
-import {MathDocument} from "@mathjax/src/js/core/MathDocument.js";
+import { browserAdaptor } from "@mathjax/src/js/adaptors/browserAdaptor.js";
+import { RegisterHTMLHandler } from "@mathjax/src/js/handlers/html.js";
+import { mathjax } from "@mathjax/src/js/mathjax.js";
+import { MathML } from "@mathjax/src/js/input/mathml.js";
+import { SVG } from "@mathjax/src/js/output/svg.js";
+import { MathDocument } from "@mathjax/src/js/core/MathDocument.js";
 
-import {OneNote} from "../onenote";
-import {bufferToHex, ConvertibleImage} from "./image";
-import {MathMLToLaTeX} from "mathml-to-latex";
-import {round3} from "../../rnote/utils";
-import {FileId} from "@excalidraw/element/types";
+import { OneNote } from "../onenote";
+import { bufferToHex, ConvertibleImage } from "./image";
+import { MathMLToLaTeX } from "mathml-to-latex";
+import { round3 } from "../../rnote/utils";
+import { FileId } from "@excalidraw/element/types";
 
 const adaptor = browserAdaptor();
 RegisterHTMLHandler(adaptor);
 
-
 function mathHeight(math: HTMLSpanElement, quality: number, zoom: number) {
-    const rect = math.getBoundingClientRect();
-    return round3(rect.height / zoom * quality);
+  const rect = math.getBoundingClientRect();
+  return round3((rect.height / zoom) * quality);
 }
 
 function mathWidth(math: HTMLSpanElement, quality: number, zoom: number) {
-    const rect = math.getBoundingClientRect();
-    return round3(rect.width / zoom * quality);
+  const rect = math.getBoundingClientRect();
+  return round3((rect.width / zoom) * quality);
 }
 
 export class Math extends ConvertibleImage {
-    readonly x: number;
-    readonly y: number;
-    readonly document: OneNote;
-    readonly math: HTMLSpanElement;
-    static mathDocument: MathDocument<any, any, any> | undefined = undefined;
-    private image: HTMLImageElement | undefined;
-    #uuid?: FileId = undefined;
+  readonly x: number;
+  readonly y: number;
+  readonly document: OneNote;
+  readonly math: HTMLSpanElement;
+  static mathDocument: MathDocument<any, any, any> | undefined = undefined;
+  private image: HTMLImageElement | undefined;
+  #uuid?: FileId = undefined;
 
-    constructor(document: OneNote, math: HTMLSpanElement) {
-        super(Math.mathToImage(math),
-            document.options.math_dark_mode,
-            document.options.math_quality,
-            mathWidth(math, document.options.math_quality, document.zoom),
-            mathHeight(math, document.options.math_quality, document.zoom)
-        );
-        this.document = document;
-        this.math = math;
-        const rect = math.getBoundingClientRect();
-        this.x = (rect.x - document.offsets.x) / document.zoom;
-        this.y = (rect.y - document.offsets.y) / document.zoom;
+  constructor(document: OneNote, math: HTMLSpanElement) {
+    super(
+      Math.mathToImage(math),
+      document.options.math_dark_mode,
+      document.options.math_quality,
+      mathWidth(math, document.options.math_quality, document.zoom),
+      mathHeight(math, document.options.math_quality, document.zoom),
+    );
+    this.document = document;
+    this.math = math;
+    const rect = math.getBoundingClientRect();
+    this.x = (rect.x - document.offsets.x) / document.zoom;
+    this.y = (rect.y - document.offsets.y) / document.zoom;
+  }
+
+  static getMathDocument() {
+    if (!Math.mathDocument) {
+      Math.mathDocument = mathjax.document("", {
+        InputJax: new MathML(),
+        OutputJax: new SVG({
+          mathmlSpacing: true,
+          fontCache: "local",
+        }),
+      });
     }
+    return Math.mathDocument;
+  }
 
-    static getMathDocument() {
-        if (!Math.mathDocument) {
-            Math.mathDocument = mathjax.document('', {
-                InputJax: new MathML(),
-                OutputJax: new SVG({
-                    mathmlSpacing: true,
-                    fontCache: 'local'
-                }),
-            });
-        }
-        return Math.mathDocument;
+  static async mathToImage(math: HTMLSpanElement) {
+    const mathDocument = Math.getMathDocument();
+    const node = mathDocument.convert(math.innerHTML);
+
+    const blob = new Blob([adaptor.innerHTML(node)], {
+      type: "image/svg+xml;charset=utf-8",
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    // Converting to SVG to Base64 to load it as an Image
+    const img = new window.Image();
+    await new Promise((resolve, reject) => {
+      img.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve(img);
+      };
+      img.onerror = (e) => {
+        URL.revokeObjectURL(url);
+        reject(e);
+      };
+      img.src = url;
+    });
+    return img;
+  }
+
+  toLatex() {
+    return MathMLToLaTeX.convert(this.math.outerHTML);
+  }
+
+  private async getImage() {
+    if (!this.image) {
+      this.image = await this.imagePromise;
     }
+    return this.image;
+  }
 
-    static async mathToImage(math: HTMLSpanElement) {
-        const mathDocument = Math.getMathDocument();
-        const node = mathDocument.convert(math.innerHTML);
+  async width() {
+    const image = await this.getImage();
+    return image.width;
+  }
 
-        const blob = new Blob([adaptor.innerHTML(node)], {type: "image/svg+xml;charset=utf-8"});
+  async height() {
+    const image = await this.getImage();
+    return image.height;
+  }
 
-        const url = URL.createObjectURL(blob);
-
-        // Converting to SVG to Base64 to load it as an Image
-        const img = new window.Image();
-        await new Promise((resolve, reject) => {
-            img.onload = () => {
-                resolve(img)
-            };
-            img.onerror = (e) => {
-                reject(e)
-            }
-            img.src = url;
-        });
-        return img;
+  async uuid(): Promise<FileId> {
+    if (!this.#uuid) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(this.math.innerHTML);
+      const buffer = await crypto.subtle.digest("SHA-1", data);
+      this.#uuid = bufferToHex(buffer);
     }
-
-    toLatex() {
-        return MathMLToLaTeX.convert(this.math.outerHTML);
-    }
-
-    private async getImage() {
-        if (!this.image) {
-            this.image = await this.imagePromise;
-        }
-        return this.image;
-    }
-
-    async width() {
-        const image = await this.getImage();
-        return image.width;
-    }
-
-    async height() {
-        const image = await this.getImage();
-        return image.height;
-    }
-
-    async uuid(): Promise<FileId> {
-        if (!this.#uuid) {
-            const encoder = new TextEncoder();
-            const data = encoder.encode(this.math.innerHTML);
-            const buffer = await crypto.subtle.digest("SHA-1", data);
-            this.#uuid = bufferToHex(buffer);
-        }
-        return this.#uuid;
-    }
-
+    return this.#uuid;
+  }
 }
