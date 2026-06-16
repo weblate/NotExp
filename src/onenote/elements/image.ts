@@ -111,7 +111,14 @@ export class ConvertibleImage {
       this.override_height || image.height,
     );
     const raw: ImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const src = btoa(String.fromCharCode(...pack(raw.data)));
+    const packed = pack(raw.data);
+    let binary = "";
+    // Spread has a call-stack argument limit; process in chunks to avoid RangeError on large images
+    const CHUNK = 32768;
+    for (let i = 0; i < packed.length; i += CHUNK) {
+      binary += String.fromCharCode(...(packed.subarray(i, i + CHUNK) as unknown as number[]));
+    }
+    const src = btoa(binary);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     return src.replace(IMAGE_BASE64_REGEXP, "");
   }
