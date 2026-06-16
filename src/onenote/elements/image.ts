@@ -1,7 +1,7 @@
-import {OneNote} from "../onenote";
-import {round3} from "../../rnote/utils";
-import {blobToBase64} from "../../adapters/utils";
-import {FileId} from "@excalidraw/element/types";
+import { OneNote } from "../onenote";
+import { round3 } from "../../rnote/utils";
+import { blobToBase64 } from "../../adapters/utils";
+import { FileId } from "@excalidraw/element/types";
 
 const IMAGE_BASE64_REGEXP = new RegExp("data:image/.*;base64,");
 
@@ -9,168 +9,195 @@ const IMAGE_BASE64_REGEXP = new RegExp("data:image/.*;base64,");
 // R,G,B are premultiplied by the percentage represented by the A value.
 // From the Canvas we get the r,g,b,a sequence in a "byte" format, which has to be packed and
 // converted to a string to be encoded in base64
-export function pack(data: ImageDataArray) {
-    let chunks = "";
-
-    for (let i = 0; i < data.length; i += 4) {
-        const a = data[i + 3]
-        const r = data[i] * (a / 255);
-        const g = data[i + 1] * (a / 255);
-        const b = data[i + 2] * (a / 255);
-        chunks += `${String.fromCharCode(r)}${String.fromCharCode(g)}${String.fromCharCode(b)}${String.fromCharCode(a)}`;
-    }
-    return chunks;
+export function pack(data: Uint8ClampedArray): Uint8Array {
+  const result = new Uint8Array(data.length);
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3];
+    result[i] = Math.round(data[i] * (a / 255));
+    result[i + 1] = Math.round(data[i + 1] * (a / 255));
+    result[i + 2] = Math.round(data[i + 2] * (a / 255));
+    result[i + 3] = a;
+  }
+  return result;
 }
 
 export class ConvertibleImage {
-    protected static canvas: OffscreenCanvas | undefined;
-    protected static ctx: OffscreenCanvasRenderingContext2D | undefined;
-    private readonly override_width: number | undefined = undefined;
-    private readonly override_height: number | undefined = undefined;
-    private readonly scale: number;
-    private resolvedImage?: HTMLImageElement;
+  protected static canvas: OffscreenCanvas | undefined;
+  protected static ctx: OffscreenCanvasRenderingContext2D | undefined;
+  private readonly override_width: number | undefined = undefined;
+  private readonly override_height: number | undefined = undefined;
+  private readonly scale: number;
+  private resolvedImage?: HTMLImageElement;
 
-    constructor(protected imagePromise: Promise<HTMLImageElement>, private invertColors: boolean = false, scale: number = 1, override_width: number | undefined = undefined, override_height: number | undefined = undefined) {
-        this.override_width = override_width;
-        this.override_height = override_height;
-        this.scale = scale;
+  constructor(
+    protected imagePromise: Promise<HTMLImageElement>,
+    private invertColors: boolean = false,
+    scale: number = 1,
+    override_width: number | undefined = undefined,
+    override_height: number | undefined = undefined,
+  ) {
+    this.override_width = override_width;
+    this.override_height = override_height;
+    this.scale = scale;
+  }
+
+  private async getResolvedImage() {
+    if (!this.resolvedImage) {
+      this.resolvedImage = await this.imagePromise;
+    }
+    return this.resolvedImage;
+  }
+
+  protected getCanvas() {
+    if (!ConvertibleImage.canvas) {
+      ConvertibleImage.canvas = new OffscreenCanvas(0, 0);
+    }
+    return ConvertibleImage.canvas;
+  }
+
+  protected getCtx() {
+    if (!ConvertibleImage.ctx) {
+      const canvas = this.getCanvas();
+      ConvertibleImage.ctx = canvas.getContext("2d")!;
+    }
+    return ConvertibleImage.ctx;
+  }
+
+  async asEncodedPng(): Promise<string> {
+    const canvas = this.getCanvas();
+    const ctx = this.getCtx();
+    const image = await this.getResolvedImage();
+
+    /* Converting non-PNG image to PNG using Canvas */
+    let src = image.src;
+    const isPng = new RegExp("data:image/png;base64,.*");
+
+    if (ctx && !isPng.test(src)) {
+      canvas.width = image.width * this.scale;
+      canvas.height = image.height * this.scale;
+      if (this.invertColors) {
+        ctx.filter = "invert(1)";
+      }
+      ctx.drawImage(
+        image,
+        0,
+        0,
+        this.override_width || image.width,
+        this.override_height || image.height,
+      );
+      const canvas_blob = await canvas.convertToBlob({ type: "image/png" });
+      src = await blobToBase64(canvas_blob);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
     }
 
-    private async getResolvedImage() {
-        if (!this.resolvedImage) {
-            this.resolvedImage = await this.imagePromise;
-        }
-        return this.resolvedImage;
+    return src.replace(IMAGE_BASE64_REGEXP, "");
+  }
+
+  async asEncodedR8G8B8A8Premultiplied(): Promise<string> {
+    const canvas = this.getCanvas();
+    const ctx = this.getCtx();
+    const image = await this.getResolvedImage();
+
+    canvas.width = image.width * this.scale;
+    canvas.height = image.height * this.scale;
+    if (this.invertColors) {
+      ctx.filter = "invert(1)";
     }
+    ctx.drawImage(
+      image,
+      0,
+      0,
+      this.override_width || image.width,
+      this.override_height || image.height,
+    );
+    const raw: ImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const src = btoa(String.fromCharCode(...pack(raw.data)));
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    return src.replace(IMAGE_BASE64_REGEXP, "");
+  }
 
-    protected getCanvas() {
-        if (!ConvertibleImage.canvas) {
-            ConvertibleImage.canvas = new OffscreenCanvas(0, 0);
-        }
-        return ConvertibleImage.canvas;
-    }
+  async finalHeight(): Promise<number> {
+    const image = await this.getResolvedImage();
+    return image.height * this.scale;
+  }
 
-    protected getCtx() {
-        if (!ConvertibleImage.ctx) {
-            const canvas = this.getCanvas();
-            ConvertibleImage.ctx = canvas.getContext("2d")!;
-        }
-        return ConvertibleImage.ctx;
-    }
-
-    async asEncodedPng(): Promise<string> {
-        const canvas = this.getCanvas();
-        const ctx = this.getCtx();
-        const image = await this.getResolvedImage();
-
-        /* Converting non-PNG image to PNG using Canvas */
-        let src = image.src;
-        const isPng = new RegExp("data:image/png;base64,.*");
-
-        if (ctx && !isPng.test(src)) {
-            canvas.width = image.width * this.scale;
-            canvas.height = image.height * this.scale;
-            if (this.invertColors) {
-                ctx.filter = 'invert(1)';
-            }
-            ctx.drawImage(image, 0, 0, this.override_width || image.width, this.override_height || image.height);
-            const canvas_blob = await canvas.convertToBlob({type: "image/png"});
-            src = await blobToBase64(canvas_blob);
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-        }
-
-        return src.replace(IMAGE_BASE64_REGEXP, "");
-    }
-
-    async asEncodedR8G8B8A8Premultiplied(): Promise<string> {
-        const canvas = this.getCanvas();
-        const ctx = this.getCtx();
-        const image = await this.getResolvedImage();
-
-        canvas.width = image.width * this.scale;
-        canvas.height = image.height * this.scale;
-        if (this.invertColors) {
-            ctx.filter = 'invert(1)';
-        }
-        ctx.drawImage(image, 0, 0, this.override_width || image.width, this.override_height || image.height);
-        const raw: ImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const src = btoa(pack(raw.data));
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        return src.replace(IMAGE_BASE64_REGEXP, "");
-    }
-
-    async finalHeight(): Promise<number> {
-        const image = await this.getResolvedImage();
-        return image.height * this.scale;
-    }
-
-    async finalWidth(): Promise<number> {
-        const image = await this.getResolvedImage();
-        return image.width * this.scale;
-    }
+  async finalWidth(): Promise<number> {
+    const image = await this.getResolvedImage();
+    return image.width * this.scale;
+  }
 }
 
 export function bufferToHex(buffer: ArrayBuffer): FileId {
+  // @ts-ignore
+  if (Uint8Array.prototype.toHex) {
+    // Use toHex if supported.
     // @ts-ignore
-    if (Uint8Array.prototype.toHex) {
-        // Use toHex if supported.
-        // @ts-ignore
-        return new Uint8Array(buffer).toHex(); // Convert ArrayBuffer to hex string.
-    }
-    // If toHex() is not supported, fall back to an alternative implementation.
-    const hashArray = Array.from(new Uint8Array(buffer)); // convert buffer to byte array
-    // convert bytes to hex string
-    return hashArray
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("") as FileId;
+    return new Uint8Array(buffer).toHex(); // Convert ArrayBuffer to hex string.
+  }
+  // If toHex() is not supported, fall back to an alternative implementation.
+  const hashArray = Array.from(new Uint8Array(buffer)); // convert buffer to byte array
+  // convert bytes to hex string
+  return hashArray
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("") as FileId;
 }
 
 export class Image extends ConvertibleImage {
-    readonly document: OneNote;
-    readonly container: HTMLDivElement;
-    readonly x: number;
-    readonly y: number;
-    readonly width: number;
-    readonly height: number;
-    readonly image: HTMLImageElement;
-    #uuid?: string;
+  readonly document: OneNote;
+  readonly container: HTMLDivElement;
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+  readonly image: HTMLImageElement;
+  #uuid?: string;
 
-    constructor(document: OneNote, container: HTMLDivElement) {
-        super(new Promise<HTMLImageElement>((resolve, _) => {
-            resolve((container.getElementsByClassName("WACImage") as HTMLCollectionOf<HTMLImageElement>)[0])
-        }));
-        this.document = document;
-        this.container = container;
-        this.image = (container.getElementsByClassName("WACImage") as HTMLCollectionOf<HTMLImageElement>)[0];
+  constructor(document: OneNote, container: HTMLDivElement) {
+    super(
+      new Promise<HTMLImageElement>((resolve, _) => {
+        resolve(
+          (
+            container.getElementsByClassName(
+              "WACImage",
+            ) as HTMLCollectionOf<HTMLImageElement>
+          )[0],
+        );
+      }),
+    );
+    this.document = document;
+    this.container = container;
+    this.image = (
+      container.getElementsByClassName(
+        "WACImage",
+      ) as HTMLCollectionOf<HTMLImageElement>
+    )[0];
 
+    const offsets = this.document.offsets;
+    const zoom = this.document.zoom;
 
-        const offsets = this.document.offsets;
-        const zoom = this.document.zoom;
+    // OneNote uses (at least?) two types of positioning method for the images:
+    // Absolute: coordinates are inside the WACImageContainer style;
+    // Relative: the image is shifted by an offset from the main WACViewPanel.
+    // We try first with the absolute position, if it's not found, we try to calculate the relative position,
+    // converting it to an (hopefully correct) absolute one
+    const x = Number(container.style.left.replace("px", "")) || 0;
+    const y = Number(container.style.top.replace("px", "")) || 0;
 
-        // OneNote uses (at least?) two types of positioning method for the images:
-        // Absolute: coordinates are inside the WACImageContainer style;
-        // Relative: the image is shifted by an offset from the main WACViewPanel.
-        // We try first with the absolute position, if it's not found, we try to calculate the relative position,
-        // converting it to an (hopefully correct) absolute one
-        const x = Number(container.style.left.replace("px", "")) || 0;
-        const y = Number(container.style.top.replace("px", "")) || 0;
+    const image_boundaries = this.image.getBoundingClientRect();
+    this.x = round3(x || (image_boundaries.x - offsets.x) / zoom);
+    this.y = round3(y || (image_boundaries.y - offsets.y) / zoom);
 
-        const image_boundaries = this.image.getBoundingClientRect();
-        this.x = round3(x || ((image_boundaries.x - offsets.x) / zoom));
-        this.y = round3(y || ((image_boundaries.y - offsets.y) / zoom));
+    this.width = this.image.width;
+    this.height = this.image.height;
+  }
 
-        this.width = this.image.width;
-        this.height = this.image.height;
+  async uuid(): Promise<FileId> {
+    if (!this.#uuid) {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(this.image.src);
+      const buffer = await crypto.subtle.digest("SHA-1", data);
+      this.#uuid = bufferToHex(buffer);
     }
-
-    async uuid(): Promise<FileId> {
-        if (!this.#uuid) {
-            const encoder = new TextEncoder();
-            const data = encoder.encode(this.image.src);
-            const buffer = await crypto.subtle.digest("SHA-1", data);
-            this.#uuid = bufferToHex(buffer);
-        }
-        return this.#uuid as FileId;
-    }
-
+    return this.#uuid as FileId;
+  }
 }
