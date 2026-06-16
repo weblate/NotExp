@@ -9,7 +9,7 @@ const IMAGE_BASE64_REGEXP = new RegExp("data:image/.*;base64,");
 // R,G,B are premultiplied by the percentage represented by the A value.
 // From the Canvas we get the r,g,b,a sequence in a "byte" format, which has to be packed and
 // converted to a string to be encoded in base64
-export function pack(data: Uint8ClampedArray): Uint8Array {
+export function pack(data: ImageDataArray): Uint8Array {
   const result = new Uint8Array(data.length);
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3];
@@ -116,7 +116,9 @@ export class ConvertibleImage {
     // Spread has a call-stack argument limit; process in chunks to avoid RangeError on large images
     const CHUNK = 32768;
     for (let i = 0; i < packed.length; i += CHUNK) {
-      binary += String.fromCharCode(...(packed.subarray(i, i + CHUNK) as unknown as number[]));
+      binary += String.fromCharCode(
+        ...(packed.subarray(i, i + CHUNK) as unknown as number[]),
+      );
     }
     const src = btoa(binary);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
